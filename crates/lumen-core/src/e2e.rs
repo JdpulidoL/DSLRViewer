@@ -201,6 +201,8 @@ fn bracket_can_be_cancelled() {
 #[test]
 #[ignore]
 fn probe_real_camera() {
+    // WPD (and its COM guard) only exists on Windows; Linux CI still has to compile this test.
+    #[cfg(windows)]
     let _com = crate::link::wpd::ComGuard::new();
     for d in link::scan() {
         println!("device: {:?} / {} / {}", d.kind, d.name, d.detail);
