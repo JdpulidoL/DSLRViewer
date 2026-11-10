@@ -1,0 +1,27 @@
+[workspace]
+resolver = "3"
+members = ["crates/lumen-core", "crates/lumen-android", "apps/desktop"]
+default-members = ["crates/lumen-core", "crates/lumen-android", "apps/desktop"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+
+[workspace.dependencies]
+anyhow = "1.0.104"
+crossbeam-channel = "0.5.17"
+image = "0.25.10"
+rayon = "1.12.0"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+thiserror = "2.0.21"
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+lto = "thin"
+codegen-units = 4

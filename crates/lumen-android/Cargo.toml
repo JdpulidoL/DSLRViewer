@@ -1,0 +1,23 @@
+[package]
+name = "lumen-android"
+version.workspace = true
+edition.workspace = true
+description = "UniFFI bindings that expose lumen-core to the native Android (Kotlin) app."
+
+[lib]
+# cdylib = libLumen_android.so loaded by Kotlin; lib = lets host `cargo test/clippy` build it too.
+crate-type = ["cdylib", "lib"]
+name = "lumen_android"
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["bindgen"]
+
+[features]
+bindgen = ["uniffi/cli"]
+
+[dependencies]
+lumen-core = { path = "../lumen-core" }
+crossbeam-channel.workspace = true
+uniffi = "0.29"

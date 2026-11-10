@@ -1,0 +1,8 @@
+.gradle/
+build/
+local.properties
+*.jks
+*.keystore
+# Generated from the Rust crate (cargo-ndk + uniffi-bindgen) by the Gradle build.
+app/src/main/jniLibs/
+app/build/

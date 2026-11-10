@@ -1,0 +1,137 @@
+name: Release
+
+# Push a tag such as v0.2.0 (or v0.2.0-rc1 for a pre-release) to publish the Windows build
+# and the signed Android APK + AAB as one GitHub Release.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build without publishing, e.g. 0.2.0"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      name: ${{ steps.v.outputs.name }}
+      code: ${{ steps.v.outputs.code }}
+      prerelease: ${{ steps.v.outputs.prerelease }}
+    steps:
+      - id: v
+        shell: bash
+        run: |
+          raw="${{ github.event.inputs.version || github.ref_name }}"
+          name="${raw#v}"
+          core="${name%%-*}"
+          IFS=. read -r major minor patch <<< "$core"
+          [[ "$major" =~ ^[0-9]+$ && "$minor" =~ ^[0-9]+$ && "$patch" =~ ^[0-9]+$ ]] || { echo "Bad version: $raw"; exit 1; }
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          # Monotonic Play-style versionCode: 1.2.3 -> 10203.
+          echo "code=$((major * 10000 + minor * 100 + patch))" >> "$GITHUB_OUTPUT"
+          [[ "$name" == *-* ]] && echo "prerelease=true" >> "$GITHUB_OUTPUT" || echo "prerelease=false" >> "$GITHUB_OUTPUT"
+
+  windows:
+    needs: version
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Stamp version
+        shell: bash
+        run: sed -i 's/^version = ".*"/version = "${{ needs.version.outputs.name }}"/' Cargo.toml && grep -n '^version' Cargo.toml
+      - run: cargo test --workspace
+      - run: cargo build --release -p lumen
+      - name: Package
+        shell: pwsh
+        run: |
+          $dir = "lumen-${{ needs.version.outputs.name }}-windows-x64"
+          New-Item -ItemType Directory $dir | Out-Null
+          Copy-Item target/release/lumen.exe $dir/
+          Copy-Item README.md $dir/
+          Compress-Archive -Path $dir -DestinationPath "$dir.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: lumen-*-windows-x64.zip
+          if-no-files-found: error
+
+  android:
+    needs: version
+    runs-on: ubuntu-latest
+    env:
+      ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+      ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+      ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require signing secrets
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+        run: |
+          # An unsigned release APK cannot be installed, so fail early instead of publishing one.
+          [ -n "$KEYSTORE_B64" ] || { echo "::error::Missing secret ANDROID_KEYSTORE_B64 (see docs/RELEASING.md)"; exit 1; }
+          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+          echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-ndk
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10.2"
+      - name: Stamp version
+        run: |
+          sed -i 's/^version = ".*"/version = "${{ needs.version.outputs.name }}"/' Cargo.toml
+          # Refresh the workspace members' versions in Cargo.lock, otherwise Gradle's `cargo --locked` steps fail.
+          cargo metadata --format-version 1 > /dev/null
+      - run: echo "ANDROID_NDK_HOME=$ANDROID_NDK_LATEST_HOME" >> "$GITHUB_ENV"
+      - name: Build signed APK and AAB
+        run: >
+          bash android/gradlew -p android assembleRelease bundleRelease --no-daemon
+          -PversionName=${{ needs.version.outputs.name }}
+          -PversionCode=${{ needs.version.outputs.code }}
+      - name: Collect
+        run: |
+          v="${{ needs.version.outputs.name }}"
+          mkdir out
+          cp android/app/build/outputs/apk/release/*.apk "out/lumen-$v-android.apk"
+          cp android/app/build/outputs/bundle/release/*.aab "out/lumen-$v-android.aab"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: out/*
+          if-no-files-found: error
+
+  publish:
+    # workflow_dispatch builds everything for inspection but never publishes.
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [version, windows, android]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+          prerelease: ${{ needs.version.outputs.prerelease == 'true' }}

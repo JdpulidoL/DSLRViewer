@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -Dwarnings
+
+jobs:
+  # Camera protocol/engine/imaging on Linux: fast feedback and it exercises the unix-only
+  # file-descriptor USB path that Android uses (not compiled on Windows).
+  core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy -p lumen-core -p lumen-android --all-targets --locked
+      - run: cargo test -p lumen-core -p lumen-android --locked
+
+  # The shipping desktop target. Whole workspace: includes the WPD driver and the egui app.
+  desktop:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets --locked
+      - run: cargo test --workspace --locked
+      - run: cargo build --release -p lumen --locked
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lumen-windows-x64
+          path: target/release/lumen.exe
+          if-no-files-found: error
+          retention-days: 7
+
+  android:
+    runs-on: ubuntu-latest
+    env:
+      # RUSTFLAGS -Dwarnings is for our own crates; third-party C builds and the NDK linker don't need it.
+      RUSTFLAGS: ""
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,x86_64-linux-android
+      - uses: Swatinem/rust-cache@v2
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-ndk
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10.2"
+      - name: Point cargo-ndk at the NDK preinstalled on the runner
+        run: echo "ANDROID_NDK_HOME=$ANDROID_NDK_LATEST_HOME" >> "$GITHUB_ENV"
+      - name: Build debug APK (compiles Rust for 3 ABIs, generates Kotlin bindings)
+        run: bash android/gradlew -p android assembleDebug --no-daemon
+      - run: bash android/gradlew -p android testDebugUnitTest --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lumen-android-debug
+          path: android/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 7

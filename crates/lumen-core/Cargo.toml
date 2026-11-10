@@ -1,0 +1,18 @@
+[package]
+name = "lumen-core"
+version.workspace = true
+edition.workspace = true
+description = "Camera protocol, engine and imaging shared by the desktop and Android apps (no UI)."
+
+[dependencies]
+anyhow.workspace = true
+crossbeam-channel.workspace = true
+image.workspace = true
+rayon.workspace = true
+rusb = { version = "0.9.4", features = ["vendored"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[target."cfg(windows)".dependencies]
+windows = { version = "0.62.2", features = ["Win32_Devices_PortableDevices", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Variant", "Win32_UI_Shell_PropertiesSystem", "Win32_Foundation", "Win32_Devices_Properties"] }
